@@ -1,0 +1,637 @@
+
+
+http1.0缺点：
+
+* 每个TCP连接只能发送一个请求
+
+http1.1优点
+* 持久连接
+* 增加host请求头（支持一个服务器上拥有多个虚拟域名）IP和host解耦
+http1.1缺点
+* 明文传输
+* 请求无状态
+* 单向传输
+http2.0优点
+* 基于二进制帧传输 无序不会阻塞
+* 请求头压缩
+* 服务端推送
+* 基于ssl或tls的加密
+http2.0缺点
+* TCP 以及 TCP+TLS建立连接的延时
+* 队头阻塞未完全解决
+
+http3
+* 基于udp快速握手
+* 多路复用 同一个连接区分多个流 不互相影响
+
+
+
+IO模型
+1.BIO：用户进程阻塞等待数据，kernel阻塞等待数据准备好，多个请求需要多个线程处理每个IO请求
+
+2.NIO：用户进程不阻塞等待，而是不断询问kernel数据是否准备好
+3.IO multiplexing（适用于连接数多，事件驱动模型）：用户进程调用select/poll/epoll，然后进入阻塞状态，kernel监控所有select负责的socket，任何一个socket的数据准备好，select就会返回，用户进程就可以从kernel拷贝数据了（使用一个线程监控IO请求，用户进程注册监听IO请求的结果）
+
+4.AIO：用户进程不阻塞等待，kernel等数据准备好后发送signal给用户进程通知
+
+
+平衡树
+
+
+B树为2-3结点树
+B+树为数据都在叶子结点的B树 
+红黑树 依赖其性质控制平衡树最长路径不会超过最短路径的2倍
+
+innodb使用B+树？
+1. 使用B+树而不是B数的原因
+    1. B+树节点大小更小，一次IO读入的节点数更多
+    2. B+树的数据都在叶子节点中，遍历和区间访问性能大幅提高
+    3. B+树查询效率稳定
+2. 使用B+树而不是AVL树、红黑树的原因
+    1. B+树的树高比AVL树、红黑树低，IO次数少
+
+
+
+hashmap
+扩容尾插法：避免出现循环链表
+容量为2的幂次方原因：分布hashcode的时候使用容量-1进行位与计算即可取模，扩容时直接用<<左移翻倍
+
+Hash冲突解决方法：拉链法和线性探测法 拉链法需要额外的指针空间，线性探测法节点规模较大时浪费空间，无法真正删除节点
+
+Java8hashmap链表转红黑树长度为什么是8？
+
+之所以是8，是因为Java的源码贡献者在进行大量实验发现，hash碰撞发生8次的概率已经降低到了0.00000006，几乎为不可能事件，如果真的碰撞发生了8次，那么这个时候说明由于元素本身和hash函数的原因，此次操作的hash碰撞的可能性非常大了，后序可能还会继续发生hash碰撞。所以，这个时候，就应该将链表转换为红黑树
+
+源码解析：https://segmentfault.com/a/1190000012926722
+
+基于分段锁的concurrentHashmap
+基于CAS的concurrentHashmap  jdk1.8后
+https://www.zhenchao.org/2019/01/31/java/cas-based-concurrent-hashmap/
+
+
+
+Redis
+
+高吞吐率的原因：
+1.基于内存的操作
+2.单线程
+3.NIO多路复用	（监听文件事件和时间事件（更新时间，处理过期数据，持久化，同步数据），先处理文件事件，再处理时间事件，因此时间事件会稍微晚点）
+
+分布式锁：
+加锁：SET NX
+解锁：使用Lua脚本合并若存在则删除操作
+
+问题1：锁过期但是线程还未处理完
+a.守护线程续命 b.超时回滚
+问题2：锁未从主节点同步至从节点，从节点上位
+a.使用ZooKeeper分布式锁
+
+数据类型：
+1.String
+2.Hash 保存多个键值对 HMSET HGET key field
+3.List 双向链表  lpush, rpush ,lpop ,rpop, lrange start end 应用：朋友圈
+4.Set HashMap 实现 sadd,smembers
+5.ZSet 有序集合 zadd key score value zrange  zrem zcard 内部使用hashmap和跳跃表实现 应用：排行榜
+6.发布订阅类型 基于链表实现
+
+哈希扩容：渐进式rehash 保存一个rehashIndex 每次迁移rehashIndex的内容到扩容后的数组，对字典的操作也会在两个table中操作
+
+跳跃表：
+主结构: header,tail,level(最高层数),length
+节点结构: 层列表（前进指针和跨度）、后退指针、分值、对象
+查找过程：在最高层查找，若是未找到则在下一层的区间内继续查找，算法复杂度O(logN) 
+插入过程：概率论算法 层数为MaxLevel的概率是1/2^(MaxLevel -1)
+第一层100% 有，找到对应位置更新其每层前驱及该节点的前进指针和跨度（span）
+
+
+
+缓存穿透：不存在的key一直请求 解决：使用布隆过滤器 	覆盖所有存在的key的bitmap 或者存null并设置过期时间
+
+缓存雪崩：一大堆key同时失效 db压力瞬间变大  解决方案：访问db使用队列 或者 设置key失效时间时加随机值
+
+缓存击穿：一个高热点key失效同时很多请求过来db 解决方案：互斥锁
+
+一致性hash算法：缓存结点新增与删除只影响一部分hash范围 分配到下一个结点
+
+过期键删除策略：定时删除(定时器)，惰性(懒汉)删除，定期删除
+
+LRU淘汰策略实现：
+自己实现使用Hashmap+双向链表 当添加key的时候将结点插到头指针之后并判断是否到达容量到达上限，若是到达上限，则删除链表尾部的结点（尾指针前面的结点），在获取key成功后，将该结点从链表移除并插入到头指针之后
+Redis实现保存一个全局时钟，每100ms刷新一次（和hz参数相关），每次访问（插入和访问）更新结点的时钟值为当前时间，主动淘汰时根据maxmemory_samples选择固定数目的key值，根据其时钟值大小进行判断是否需要淘汰
+
+持久化：
+AOF:保存优化后的写命令后根据fsync策略（默认每秒一次还有每修改同步和不同步）保存到磁盘，优化命令即为重写机制，当日志大于配置的阈值时，会创建一个新的文件，压缩完成后才会替换原有的未重写的文件；缺点是文件比RDB大，如果fsync策略不是不同步那么速度不如RDB
+RDB:copy整个数据集（bgsave），并dump下来dump.rdb，适合用于备份和容灾，恢复大数据时比aof快；版本可能不兼容，服务可用性和数据完整之间需要做出取舍
+实现：保存一个dirty计数器（上次RDBsave之后的改动次数）和lastsave时间戳，
+
+高可用：
+
+主从同步+命令传播：
+SYNC：在断开之后重连把上一次同步之后的数据对应的RDB全部传输
+PSYNC：断开之后重连把上一次未收到ACK之后的传播命令重新发送
+
+哨兵：
+集群：
+槽slot :最多16384个槽，节点自由分配，所有槽都有节点负责集群状态才是OK，计算key属于哪个slot使用CRC16对16383求余得到槽i，然后再根据clusterNode[16384]找到对应的clusterNode[i]对应的节点信息
+
+
+Spring
+
+SpringBean的作用域：singleton、prototype、request、session、global session
+生命周期：
+
+
+相关设计模式：
+简单工厂模式、工厂模式、单例模式、适配器、代理模式、装饰器模式、策略模式SecurityContextHolderStrategy、模板方法模式
+
+Bean加载过程：
+1.创建一个BeanFactory，前置准备
+2.读取Bean定义 BeanDefinitionReader
+3.注册BeanPostProcessor后置处理器，所有Bean定义都已加载，但还未开始实例化
+4.排序并执行后置处理器，代理、自动注入、循环依赖
+4.1 BeanDefinitionRegistryPostProcessor
+4.2 BeanFactoryPostProcessor
+5.广播容器事件：容器启动、刷新、关闭
+6.初始化所有Bean
+7.扫尾
+
+1.BeanFactoryPostProcessor
+2.BeanPostProcessor
+3.三级缓存->二级缓存->一级缓存
+
+自动配置：
+根据一些条件激活对应的配置，符合开箱即用的设计理念
+
+Spring AOP
+AOP失效场景：
+同一个类内部调用、非public方法、
+
+
+
+jvm
+参数配置：
+GC收集器、直接晋升老年代大小阈值、Eden和Survivor区的比例、GC最大停顿时长、使用TLAB、永久代的最大空间、使用自旋锁、使用偏向锁、内存溢出时执行指定命令、打印GC信息
+
+-Xms 最少堆大小 超过则扩容为-Xmx 一般设置一样避免扩容影响程序
+-Xmx 最大堆大小
+-Xss 栈内存大小
+-XX:MaxPermSize 方法区（元数据区）大小
+-XX:MaxDirectMemorySize 最大直接内存大小
+
+JDK工具：
+
+名称作用jps(process status）查看Java进程jstat(statistics monitoring tool)监视类装载(-class)、运行期编译(-compiler)、垃圾收集(-gc -gccapacity)jinfo(configuration inf)参数配置查看jmap(memory map)生成dump文件及堆(-heap)和永久代空间使用率以及使用的收集器类型(jmap -histo {vmid})jhat(heap analysis tool)分析jmap生成的dump文件jstack(stack trace)生成当前线程快照以及锁的附加信息(-l)
+jstat监控项说明：
+
+变量说明单位S0年轻代中第 1 个 survivor 已使用容量占比百分比S1年轻代中第 2 个 survivor 已使用容量占比百分比S0C年轻代中第 1 个 survivor 的容量字节S1C年轻代中第 2 个 survivor 的容量字节S0U年轻代中第 1 个 survivor 已使用容量字节S1U年轻代中第 2 个 survivor 已使用容量字节S0CMX年轻代中第 1 个 survivor 的最大容量字节S1CMX年轻代中第 2 个 survivor 的最大容量字节EC年轻代中 Eden 的容量字节EU年轻代中 Eden 目前已使用容量字节OC老年代的容量字节OU老年代已使用容量字节PC永久代的容量字节PU永久代已使用容量字节YGC从应用程序启动到采样时年轻代中 GC 次数YGCT从应用程序启动到采样时年轻代中 GC 所用时间秒FGC从应用程序启动到采样时老年代 GC 次数FGCT从应用程序启动到采样时老年代 GC 所用时间秒GCT从应用程序启动到采样时 GC 所用总时间秒NGC年轻代当前容量字节NGCMN年轻代初始容量字节NGCMX年轻代最大容量字节OGC老年代当前容量字节OGCMN老年代初始容量字节OGCMX老年代最大容量字节PGC永久代当前容量字节PGCMN永久代初始容量字节PGCMX永久代最大容量字节E年轻代中 Eden 已使用容量占比百分比O老年代已使用容量占比百分比P永久代已使用容量占比百分比ECMX年轻代中 Eden 的最大容量字节DSS当前所需 survivor 容量，此时 Eden 区已满字节TTs 持有次数限制MTTs 最大持有次数限制
+
+问题排查过程：
+1.CPU占用过高：top -H -p 
+2.jps查看java线程ID
+3.jstat -gc/-gcnew/gccapacity 查看gc信息
+4.jmap -histo 查看进程对象数量和排名
+
+进行jvm调参处理或者修改程序处理
+
+
+运行时内存区域：堆（线程共享，主要的GC区域）、方法区（线程共享，存储类信息、静态变量、常量信息）；java 虚拟机栈（局部变量表、操作数栈、动态链接、返回地址）、本地方法栈、程序计数器（字节码行号指示器）
++直接内存用于IO
+
+判断对象是否需要回收 可达性分析
+可作为GCRoot的对象：
+虚拟机栈中引用的对象
+方法区类静态对象
+方法区中常量引用对象
+本地方法栈中引用的对象
+比如系统类加载的Class对象，活着的Thread对象，静态变量，
+
+分配内存分为指针碰撞（移动空闲指针）和空闲列表（维护列表）：标记整理垃圾收集器如Serial、ParNew才能用指针碰撞
+
+TLAB(Thread Local Allocation Buffer) 线程本地分配缓存区 每个线程分配一块内存块，哪个线程需要分配内存，优先分配到TLAB中
+
+栈帧：
+局部变量表：存放方法参数和方法内部变量
+操作数栈：真正的代码计算
+动态连接：常量指针（对应类加载的静态解析）
+返回地址
+
+
+引用寻址：基于句柄和直接地址
+
+
+OOM：栈区、堆区、方法区、直接内存无法申请到足够的内存或者
+内存泄露：检查堆转储快照 查看泄露对象到GCRoots的引用链
+内存溢出：是否存在配置过少，对象存活过久
+SOF：栈区超出规定的栈深度
+
+垃圾收集器：
+Serial：复制（STW）
+Serial Old：标记整理MC（STW）
+ParNew：多线程的Serial可以和CMS配合工作
+Parallel Scavenge：吞吐量优先的ParNew 吞吐量=用户代码时间/（用户代码时间+垃圾收集时间）
+CMS：GC过程分为4步：初始标记（STW），并发标记，重新标记（STW），并发清除
+CMS缺点：并发过程导致用户进程变慢、无法处理浮动垃圾（因此无法等老年代满了再回收，而是使用一个阈值）、基于MS会产生大量的内存碎片（默认在FullGC之前整理碎片）
+G1:初始标记（STW）、并发标记、最终标记（STW）、筛选回收（STW）基于MC
+内部分为一块块Region，并对Region进行价值排序，如果是不同Region之间的引用的话，使用Remembered Set记录，避免全堆扫描
+
+Minor GC ：Eden区域满时，对新生代实施垃圾收集。
+Major GC ：对老年代实施垃圾收集，目前只有 CMS 收集器会单独收集老年代，也称为 CMS GC。一般伴随一次或以上的MinorGC
+Mixed GC ：对整个新生代和部分老年代实施垃圾收集，目前只有 G1 收集器采用这一策略。
+Full GC ：对整个 java 堆和方法区进行垃圾收集。触发方式：System.gc有可能触发、老年代空间不足、方法区空间不足
+
+进入老年代的方式：
+大对象 >PretenureSizeThreshold || >(同一个年龄大小总和>Survivor空间的一半，即动态年龄判定)
+GC年龄超过MaxTenuringThreshold
+Survivor空间已满
+
+
+
+
+
+引用：
+强引用：不会回收
+软引用：内存溢出之前回收
+弱引用：每次垃圾回收都会回收
+虚引用：被回收时通知
+
+逃逸分析
+条件：
+对象被赋值给堆中对象和类的静态变量
+对象被传从不确定的代码执行
+优化：
+栈上分配对象
+同步消除
+标量替换（复杂的对象替换为基础数据类型）
+
+类加载过程：
+加载 获取类信息并转化为方法区的运行时数据结构，生成对应的Class对象
+验证 文件格式、元数据（继承关系）、字节码（语义、类型）、符号引用（）验证
+准备 分配类变量内存及设置初始值（类型的初始值）
+解析 常量从符号引用改为直接引用
+初始化 类变量，从父到子执行<clinit>
+
+双亲委派模型：
+自定义类加载器->应用程序类加载器->扩展类加载器->启动类加载器
+
+破坏双亲委派模型：
+JDK1.2向JDK1.1兼容，添加了findClass方法 X
+JNDI、JDBC服务 使用线程上下文类加载器
+OSGI 热部署
+
+Tomcat类加载器：
+CommonClassLoader<-CatalinaClassLoader（Server类）,SharedClassLoader（WebAPP共享）<-（N）WebAppClassLoader<-（N）JasperLoader(和JSP文件一对一)
+
+分派：
+静态分派：重载方法参数类型选静态类型（能找到的最低版本的类型）而不是动态类型
+动态分派：重写方法类型使用动态类型（能找到的最高版本的类型）
+
+Java内存模型：
+为什么需要JMM：多处理器同时操作同一片内存区域，会有并发问题，多个平台的内存访问差异需要屏蔽，因此需要定义程序中的变量（除线程私有的变量以外）访问规则
+主内存（堆），工作内存（栈）
+lock->read->load->use->assign->store->write->unlock
+
+volatile：变化对所有线程可见，禁止指令重排序，通过内存屏障实现
+transient：无法序列化
+
+先行发生原则：先行发生的线程所做的修改一定可以被之后的线程观察到，该原则是指令是否需要重排序的条件，包含以下规则：
+同一个线程内，前后代码按顺序执行
+同一个锁的unlock在后一个锁的lock之前
+volatile变量先后顺序
+Thread的start在这个线程的所有代码之前
+Thread的terminal在线程的所有操作之后
+Thread的interrupt方法在中断之前
+对象的初始化在finalize()之前
+传递性 A>B B>C A>C
+
+CAS：非阻塞同步，不断根据当前内存中的值作为旧值进行更新直到更新成功，  缺点：占用CPU资源，ABA（版本解决StampedLock）
+
+对象锁状态
+
+
+偏向锁：在对象头的MarkWord中偏向锁标记为1 锁标志位为01，线程获取锁如果是偏向锁&对象的偏向线程ID一致&偏向锁版本epoch和类中的epoch一致，那么可以直接获取锁。若是其他线程请求该锁则撤销该锁，若是撤销超过20次，会让该偏向锁失效并epoch++，若是失效次数超过40次，需要将该锁膨胀为轻量级锁
+轻量级锁：加锁-基于CAS尝试将当前锁对象的MarkWord复制到当前线程的栈帧并将锁对象的MarkWord指向栈帧copy的对象的指针，根据当前对象锁类型处理CAS结果 CAS成功会更新当前锁记录为0代表当前获取锁为轻量级锁， 若是当前锁对象是偏向锁，则会把锁更新为轻量级锁，若是CAS失败则尝试自旋，自旋还是未获取则升级为重量级锁；解锁- 当前线程栈帧的最顶层的锁记录 若是0说明当前线程持有轻量级锁，直接解锁成功，否则需要基于CAS将当前锁对象的MarkWord指向锁记录，成功则解锁成功 失败则升级成重量级锁，基于重量级锁的释放释放锁
+自旋锁：未获得指定资源时，指定次数或者自适应次数内重试而不是进入阻塞状态，自适应尝试次数（同一个锁短时间内刚被某线程获取过且该线程正在运行中，增加自旋次数上限）
+重量级锁：基于操作系统的 成本较高
+
+
+多线程
+https://www.zhenchao.org/categories/java/
+
+
+ConcurrentHashMap
+AQS
+ThreadLocal
+Synchronized实现
+ReentrantLock
+ReentrantReadWriteLock
+BlockingQueue
+PriorityBlockingQueue
+Semaphore
+CountDownLatch
+
+
+synchronized原理
+对象的对象头保存了标志位和Monitor的地址，Monitor会有当前锁持有者（Owner）的信息以及等待锁的线程信息，新的线程获取锁的时候如果获取不到锁并不是直接进入等待队列，而是先自旋尝试获取锁，失败才进入等待队列，所以并不是公平锁。修饰方法的时候是在字节码中添加flag：ACC_SYNCHRONIZED，修饰对象是使用monitorEnter和monitorExit的
+
+AbstractQueuedSynchronizer
+https://www.cnblogs.com/waterystone/p/4920797.html
+线程状态保存在节点中，包括
+Canceled 当前线程被中断
+Signal 该节点后继节点正在等待资源
+Condition
+Propagate
+保存着一个state 用来acquire和release
+
+同步队列：获取资源失败的时候需要将当前节点（线程）加入等待队列末尾，不存在队列则创建，入队成功之后则会基于自旋锁尝试让节点获取资源（头结点才能获取资源），获取失败可能会阻塞当前线程，入队之后需要把该节点的前驱节点状态设为Signal，以在前驱节点release的时候通知该节点，然后即可park等待前驱节点unpark自己。当头结点获取资源成功并使用结束后，release之后判断后继节点s是否为空或者取消状态，若是的话会从后往前（由于添加节点时是先设置节点的前驱，再基于CAS设置节点的后继）遍历同步队列选择下一个唤醒的节点s，将其unpark。
+
+共享模式下调用的是tryAcquireShared和tryReleaseShared，并且在节点获取到资源之后如果还有剩余资源会立即唤醒下一个等待的节点
+
+
+
+条件队列：进入同步队列等待资源之前需要先释放资源await()并进入条件队列等待，等待前驱waiter signal()才能入同步队列
+
+
+
+FairSync和NonfairSync区别：获取资源前判断是否有比自己等待更久的节点，即第二节点不是自己时。
+
+reentrantlock和synchronized区别
+都是可重入锁
+Lock ①等待可中断；②可实现公平锁；③可实现选择性通知
+synchronized是非公平锁，自旋对已进入队列的线程不公平
+lock可以实现公平锁 可响应中断、可轮询 以及锁绑定条件 
+jvm在锁和对象元数据中存储synchronized信息 方便定位
+
+CountDownLatch 和 CyclicBarrier 的区别
+CountDownLatch 用于阻塞当前 1 个或多个线程，其目的是让这些线程等待其它线程的执行完成。
+CyclicBarrier 用于阻塞当前多个线程，其目的是让这些线程彼此之间相互等待，当这些线程均到达屏障后再一起往下执行。
+CountDownLatch 是一次性的，而 CyclicBarrier 在使用完成之后允许被重置以复用。
+
+ThreadPoolExecutor拒绝策略：
+AbortPolicy:直接抛出异常
+CallerRunsPolicy:调用者线程直接执行
+DiscardOldestPolicy:丢弃最老的一个请求
+DiscardPolicy:丢弃不做任何处理
+
+ReentrantReadWriteLock
+读锁是共享锁，写锁是互斥锁
+相同线程读读/写读/写写都是可以重入的，但是读写会造成死锁，持有写锁时，持有读锁的线程和持有写锁的线程可能不是一个线程，违背不同线程读写互斥的原则（不支持锁升级）
+不同线程读读是可以成功，剩下读写/写写/写读都是互斥的
+锁降级：先获取写锁，释放写锁之前获取读锁，保证后续的读到对象是当前修改的值V0而不是其他获取到写锁修改的值V1。
+将AQS的state分成高低各16位，高位存储读锁的重入次数，低位存储写锁的重入次数
+
+获取读锁时判断写锁是否被其他线程持有，如果是获取失败
+读锁是否应该被阻塞：公平锁hasQueuedPredecessors方法 非公平锁 写锁未被持有即可获取
+
+BlockingQueue
+add 加入失败抛出异常
+offer 加入失败返回false
+put 加入失败阻塞直到成功
+offerwithtimout 阻塞加入，超时
+
+在队列对象中维护两个Condition notEmpty和notFull 入队等待条件为notFull 出队等待条件为notEmpty，入队触发条件notEmpty，出队触发条件notFull
+
+ArrayBlockingQueue：有界，基于数组实现的FIFO的，支持公平锁和非公平锁
+LinkedBlockingQueue：无界，基于链表实现的FIFO的，take和put各维护一个锁，notEmpty条件由take锁控制，notFull条件由put锁控制；全数组遍历如remove，contains等需要两个锁都获取
+put入队失败则等待，offer入队失败返回false
+PriorityBlockingQueue：入队和出队都要进行重建堆，入队需要上浮新节点，出队需要把最后一个元素替换到堆根，并下浮（和左右子节点较小的交换）
+
+Linux
+
+ps -ef  查看所有进程
+netstat -tln | grep 8080 查看8080端口占用
+ps aux 查看所有进程
+chmod rwx(421) 
+rm -r删除
+head/tail -n 10 a.txt查看文件
+kill -9 {tid}  根据线程ID终止线程 9=强制停止 15=终止 18/19 继续/暂停
+df -h(uman) 查看磁盘占用情况
+free -h(uman)t(otal) 查看内存使用情况
+nestat -a(ll) 查看端口使用情况
+nestat -l(istening) 查看监听的套接口
+nestat -t(cp) TCP端口使用情况
+nestat -pt 显示端口占用的PID和进程名称
+
+mybatis
+
+
+#和$区别：$单纯占位替换 #会加引号或者转类型
+
+
+
+MySQL
+
+B+树的优点：节点不存关键字具体信息，占用内存更少，盘块可以容纳的索引值越多，IO越少；所有关键字查询路径长度相同，查询效率更稳定。
+
+索引类型：B+树索引、哈希索引、空间索引、全文索引
+聚簇索引：在B+索引树中保存数据行，减少磁盘IO 加快访问速度；但是更新索引列代价高，数据全部移动，插入速度依赖于插入顺序；二级索引需要两次索引查找，因为二级索引保存的行指针是行的主键值。
+覆盖索引条件：索引包含查询的所有列
+索引选择原则：优先覆盖索引，判断索引覆盖行数
+分区：解决热点数据的问题；可以分区删除或者分区分布在不同的设备上；缺点是分区列如果和索引列不匹配需要把索引分布在不同分区，改表结构成本比较高
+
+主备复制：
+
+基于行的复制和基于语句的复制，都是在主库上记录二进制日志。步骤1、主库数据更改记录到二进制日志，步骤2、备库将主库二进制到自己的中继日志中，步骤3、备库重放中继日志到备库数据中
+
+基于语句的复制只会记录更改语句，不会记录查询语句，好处是简洁，坏处是有些实时计算的语句无法准确复制；基于行的复制可以更高效地复制数据，但是有时候一条语句更新大量数据时，基于行的复制代价就较大。一般默认使用基于语句的复制，如果校验有误就使用基于行的复制。
+
+
+
+MVCC（InnoDB实现）:
+快照读和当前读：
+快照读：在读事务开启时，保存当前事务的快照，不需要加锁
+当前读：每次都读取最新的数据，对于修改的事务需要进行加锁）（Next-Key Lock即锁定索引和索引之间的间隙）
+
+不可重复读和幻读的区别：同一行和多行
+解决不可重复读->可重复读级别，未解决幻读
+
+Oracle默认隔离级别为RC，MySQL是RR
+
+MVCC 允许数据库在普通读的时候不加锁
+----------------------------------
+ReadView包含以下信息
+trx_ids 活跃的事务列表
+trx_ids[0] 低水位 小于这个值的事务都已提交
+trx_id[n] 高水位 大于这个值的事务可能未创建 可能未提交
+creator_id 当前ReadView事务版本
+
+每次新建事务都创建一个新的事务ID
+读已提交：当前事务版本以及不包含在trx_ids都可以读取
+可重复读：数据版本trx_id和creator_id一致 表示是当前事务的修改 可以读取；
+trx_id小于trx_ids[0] 可以读取；trx_id大于trx_ids[n]不可以读取；trx_id在trx_ids[0]-trx_id[n]之间，判断trx_id是否包含trx_ids中，不包含才能读
+
+EXPLAIN结果字段
+fielddesce.gselect_type查询类型PRIMARY/SIMPLEtable表名或别名userpartitions分区type扫描方式NULL(统计信息或者缓存),system（只有一行数据）,const（主键或唯一索引）,eq_ref(唯一索引联表),ref(索引等值匹配)，fulltext(MyISAM全文索引),ref_or_null,unique_subquery,range(索引范围查找),index_merge(使用多个索引),index(索引全表扫描),ALL(全表扫描)possible_keyskey实际使用的索引key_len实际使用的索引的长度refrows需要扫描的记录数估计值extra其他信息distinct，impossiblewhere，usingindex(索引是否包含所有返回的列)
+
+索引失效场景
+最左前缀不匹配
+OR条件
+值为NULL
+不等于条件
+函数条件或者表达式的部分
+
+分页查询慢：辅助索引没有覆盖，存储引擎回表查询，MySQL服务器做的分页
+
+IN和Exists的区别：IN先执行子查询，Exists先查询主查询 都不如表连接
+Not IN（全表查询） 和Not Exists
+
+
+InnoDB四大特性：
+插入缓冲：在普通索引插入的时候，并不是一条条插入，而是维护了insert buffer，如果当前索引在buffer pool中，则直接插入，否则存到insertbuffer中并以一定条件合并插入（需满足辅助索引&&索引不是唯一的）
+二次写： InnoDB页大小为16KB/页 操作系统写文件4KB/次 由于系统断电或者崩溃导致只有不全一页写入，redo log是已页为单位的，因此无法解决该部分页写入的问题，InnoDB使用二次写解决：维护一个2MB的doublewrite buffer和一个磁盘上的2MB 128页的空间，当页写到磁盘时，先将页复制到doublewrite buffer中，doublewrite buffer 每次1MB地写到磁盘上，当出现部分页写入问题时 可以从磁盘上找到该页的副本，从而将整页恢复。
+自适应哈希索引：InnoDB发现有一部分索引是热点索引且是值匹配，会自动建立哈希索引提高查询效率。
+预读：预测到某些page马上会被访问到，会提前加载到缓冲池中 包括线性预读和随机预读
+
+InnoDB行锁只有在通过索引过滤时才使用行锁，否则使用表锁
+
+InnoDB和MyIsam对比
+
+
+分库分表
+水平拆分Sharding 垂直拆分 范式
+1.分布式事务：
+数据库分布式事务，简单低效
+应用控制，将多个数据库分布式事务拆成多个单数据库的事务
+2.跨节点Join
+分两次查询，应用层实现Join
+3.跨节点count orderby
+应用层并行查询并合并，可以优化
+4.数据迁移 扩容
+成倍增加，扩容时先定位旧的分区，再细分
+5.分布式ID
+UUID（不建议，不适合索引），雪花算法（整体有序，并发量高）
+6.跨节点分页
+合并排序，效率低，尽量减少页数
+7.如何扩容
+a.停机迁移，保证数据的正确性（离岸采用的方式）
+b.双写 记录一个版本MAXV，将MAXV之后的binLog同时发送至消息队列（保证顺序），迁移时先迁<=MAXV的数据 然后消费消息队列重放SQL，验证完成后1）关闭双写 2）数据库连接指向新库
+
+
+
+数据结构：
+
+hashmap和treemap区别
+treemap是键有序的 键必须实现comparable接口，Hashmap适用于插入访问和删除 ，使用键的hashcode和equals方法，treemap适用于按序遍历
+都不是线程安全的
+
+
+分布式一致性：
+
+CAP：Consistency、Availability、Partition tolerance
+BASE：Basic Available、Soft state、Eventually Consistency
+二阶段提交（2PC）：一阶段执行事务并返回结果给协调者，二阶段根据所有节点的返回决定是否提交事务
+强一致性，缺点：同步阻塞，等待其他处理完；单点问题：协调者故障可能导致事务资源不释放；
+commit请求无响应，数据不一致；
+
+三阶段提交（3PC）：一阶段询问是否可以提交，二阶段预提交执行事务，三阶段确认提交；
+引入超时机制，并在提交事务后会释放事务资源 缺点 最后三阶段的协调者消息超时会让事务提交，可能导致数据不一致
+
+Paxos：
+阶段一（prepare）：Proposer选择一个提案Mn，并向半数以上Acceptor发送该提案请求返回，如果一个Acceptor接收到一个比批准过的提案都大的提案M1，那么他保证将不会批准比M1小的提案，并返回第二小的提案M0给M1的提出者。
+阶段二（accept）：如果Proposer收到半数以上的Acceptor返回给他的M0，那么它会发送一个[M1,M0]版本的提案给Acceptor，如果Acceptor未对编号大于M1的prepare请求响应，那么他就可以批准这个提案M1
+learner获取提案：1、每个批准的提案广播给所有learner 2、每个批准的提案广播给N个主learner，由主learner同步到其他learner
+Proposer的提案占比五五开的话 需要选择主Proposer
+
+
+TCC:
+事务层面的，需要所有参与者提供try confirm cancel的动作，撤销和确认都需要保证幂等
+
+ZooKeeper（CP）
+
+ZAB（ZooKeeper Atomic Broadcast）：
+Leader发送Proposal（有序ZXID）至所有Follower，若是半数以上follower返回OK，leader即向所有follower发送提交请求。当leader不可用时，集群会进入恢复模式，先选举出新的leader，再从新leader处同步数据到所有follower。
+消息广播：二阶段提交+半数通过
+崩溃恢复：具有最高ZXID的follower，成为leader后，将未同步的follower的proposal发送给它，并在接收到过半follower的ACK后发送commit指令，成功的follower会加到真正可用的follower列表中。
+ZXID：64位数字，前32位为版本号epoch，后32位为ID，每当新proposal产生就会分配一个TXID（后32位递增），新产生一个leader之后，epoch增加，ID从零开始重新计数（不让包含未提交proposal的节点成为Leader）
+
+leader的ZXID一定为最大的，投票标准为epoch>ZXID>serverId(高可用服务器)
+
+服务器状态：
+LOOKING，FOLLOWING，LEADING，OBSERVING（Observer只处理非事务服务，不参与选举）
+
+应用：
+1.负载均衡（Kafka）
+2.集群管理
+3.分布式锁 建立临时节点（互斥锁1个节点，共享锁则是一个目录，并且获取读锁时不能有其他节点获取了写锁）通过顺序节点解决惊群效应
+4.分布式队列
+
+MQ
+异步，解耦，流量控制
+
+Kafka
+
+
+四个核心接口：
+Producer
+Consumer
+Streams
+Connector
+
+推拉模式的选择
+减少Broker的压力；消费者按照消费水平进行拉取消息；
+拉的方法：长轮询，kafka在拉消息的时候消费者和服务端都会阻塞一段时间（如果没有消息）消费者使用的是NIO的selector模型，生产者会将拉取请求保存至延迟拉取的炼狱中，使用时间轮（延时任务执行器，按指定时间单位延迟执行任务）轮询
+
+Topic：一个消息队列 可以被多个生产者消费者使用，由多个partition组成
+Partition：一个Topic下的FIFO队列，用于提高一个topic的吞吐量，可以控制有序消息，消费者消费时使用offset获取，同一个Topic的partition可以分布在不同broker上（负载均衡），同一个partition只能有一个leader，其他都是follower，保证数据容灾。生产者只与leader partition交互
+集群：使用ZooKeeper的集群管理，同一时间只有一个leader，其他都是follower，leader挂了会推举新的follower为新leader
+消费组：多个消费者的集合，订阅以消费组为单位可以只有一个消费者，每个消息分区 只能被同组的一个消费者进行消费
+
+
+ZooKeeper为Kafka做什么：
+Broker、Topic注册
+生产者负载均衡：监听Broker事件 Topic事件
+消费者负载均衡：针对partition
+消费者注册，消费进度offset注册
+消费组消费者分配partition
+
+
+保证消息消费有序性
+1.每个topic只有一个partition
+2.指定key/partition发送和消费消息
+保证消息不丢失
+1.生产者监听发送失败事件+重试次数
+2.消费者需要真正完成消费手动提交offset
+3.预防leader挂掉设置acks（接收到内存并未写入磁盘） 和min.insync.replicas（写入磁盘的副本数）
+预防消息重复消费 
+消息消费保证幂等，比如全局的消息ID说
+
+高吞吐率的原因：
+顺序写磁盘
+使用MMF（物理内存到磁盘映射，写入内存的数据会同步或异步刷新至磁盘 由produce.type = sync/async控制）
+零拷贝
+消息压缩
+IO多路复用
+offset二分查找 先定位segment再定位稀疏index 最后顺序查找
+
+
+Kafka消息删除机制：基于时间（默认7天）、基于文件partition大小
+
+kafka日志段 //TODO
+文件结构
+
+每个Broker下每个partition每个replica下都有一个Log目录，Log目录下存在多个LogSegment（对应一个log文件，以其中保存的消息的起始 offset 命名 ），通过跳跃表进行二分查找
+
+
+
+操作系统
+
+传统的文件传输
+
+零拷贝 Kafka、Nginx
+
+mmap kafkaindex文件映射
+内存映射文件的一种方法，内存文件修改的数据会直接回写至磁盘，磁盘的修改也会反应至内存空间，可以用来进程间通信
+
+进程间通信
+管道 FIFO 效率低
+消息队列 通信不及时，大小有限制，内核和用户之间的拷贝开销
+共享内存 多进程写冲突
+信号量 操作共享内存前获取锁 初始值为1为互斥信号量 初始值为0则是同步信号量 初始值大于1则是共享信号量
+信号 唯一的异步通信机制
+Socket 跨机器进程通信，也可支持本地进程通信
+
+Ctrl-C 产生SIGINT信号 
+Ctrl-Z产生SIGTSTP信号(可捕获的SIGSTOP)
+
+算法：
+
+
